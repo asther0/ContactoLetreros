@@ -1,0 +1,17 @@
+
+# Punteros locales al vault Obsidian (one-machine symlinks, no portable).
+# No commitear. Si otro dev trabaja en este repo, que corra
+# <vault>/00 meta/bin/init-vault-context.sh <project-path> <repo-dir>
+.vault-context/
+
+# Credenciales locales
+.env.local
+
+# Dependencias y artefactos de Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+.DS_Store
+
+# Fotos de prueba y teléfonos de terceros
+img/
