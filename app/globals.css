@@ -20,6 +20,12 @@ header > p:last-child { color: #5d6a62; line-height: 1.45; margin: 18px 0 0; max
 .success { background: #e2f0db; color: #34633b; }
 .error { background: #fde6e2; color: #943d2a; }
 .inbox-view header { margin-top: 24px; }
+.inbox-tabs { background: #e7e9e1; border-radius: 11px; display: grid; grid-template-columns: 1fr 1fr; margin: 18px 0 14px; padding: 4px; }
+.inbox-tabs button { background: transparent; border: 0; border-radius: 8px; color: #617067; font-size: .84rem; font-weight: 700; min-height: 38px; }
+.inbox-tabs button.active { background: #fffdf8; color: #254d38; box-shadow: 0 1px 3px #24372722; }
+.inbox-tabs b { background: #d7dfd4; border-radius: 999px; font-size: .72rem; margin-left: 4px; padding: 2px 6px; }
+.inbox-tabs .active b { background: #e1efe0; color: #2c613b; }
+.empty-tab { color: #69766e; text-align: center; }
 .inbox-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .hallazgo-card { background: #fffdf8; border: 1px solid #dfd9ce; border-radius: 16px; color: #203127; overflow: hidden; padding: 0 0 11px; text-align: left; }
 .hallazgo-card img { aspect-ratio: 1; display: block; object-fit: cover; width: 100%; }
@@ -45,4 +51,5 @@ input { background: #faf9f5; border: 1px solid #d5d9ce; border-radius: 9px; colo
 .message-card { background: #e8f0e3; }
 .message-card > p:last-of-type { color: #3f5045; line-height: 1.5; margin: 10px 0 17px; }
 .whatsapp { background: #1d4935; border: 0; border-radius: 10px; color: #fff; font-weight: 700; min-height: 48px; width: 100%; }
+.sent-button { background: transparent; border: 0; color: #315941; display: block; font-size: .83rem; font-weight: 700; margin: 12px auto 0; text-decoration: underline; }
 @media (min-width: 580px) { main { padding-top: 40px; } .capture-button { min-height: 240px; } }

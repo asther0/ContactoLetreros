@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type Operation = "alquiler" | "venta" | "";
-type Status = "captured" | "extracting" | "needs_review" | "ready_to_contact" | "contact_opened";
+type Status = "captured" | "extracting" | "needs_review" | "ready_to_contact" | "contact_opened" | "sent";
 
 type Hallazgo = {
   id: string;
@@ -68,7 +68,7 @@ function buildMessage(operation: Operation, location: string, propertyType: stri
 }
 
 function statusText(status: Status) {
-  return { captured: "Guardado", extracting: "Leyendo…", needs_review: "Revisar", ready_to_contact: "Listo", contact_opened: "WhatsApp abierto" }[status];
+  return { captured: "Guardado", extracting: "Leyendo…", needs_review: "Revisar", ready_to_contact: "Listo", contact_opened: "WhatsApp abierto", sent: "Enviado" }[status];
 }
 
 function getCurrentCoordinates() {
@@ -86,6 +86,7 @@ export default function Home() {
   const [hallazgos, setHallazgos] = useState<Hallazgo[]>([]);
   const [view, setView] = useState<"capture" | "inbox" | "review">("capture");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [inboxTab, setInboxTab] = useState<"new" | "sent">("new");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -94,7 +95,8 @@ export default function Home() {
   }, []);
 
   const selected = hallazgos.find((hallazgo) => hallazgo.id === selectedId) ?? null;
-  const pendingCount = hallazgos.filter((hallazgo) => hallazgo.status !== "contact_opened").length;
+  const pendingCount = hallazgos.filter((hallazgo) => hallazgo.status !== "sent").length;
+  const inboxHallazgos = hallazgos.filter((hallazgo) => inboxTab === "sent" ? hallazgo.status === "sent" : hallazgo.status !== "sent");
   const messagePreview = useMemo(
     () => selected ? buildMessage(selected.operation, selected.location, selected.propertyType) : "",
     [selected],
@@ -187,6 +189,12 @@ export default function Home() {
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(messagePreview)}`, "_blank", "noopener,noreferrer");
   }
 
+  function markAsSent() {
+    if (!selected) return;
+    updateHallazgo(selected.id, { status: "sent" });
+    setNotice("Marcado como enviado.");
+  }
+
   if (view === "capture") {
     return <main className="capture-view">
       <header><p className="eyebrow">CONTACTO LETREROS</p><h1>Ve. Foto.<br />Sigue.</h1><p>Guarda todos los letreros ahora. Revisa los detalles después.</p></header>
@@ -210,13 +218,13 @@ export default function Home() {
         <label>Zona aproximada<input value={selected.location} onChange={(event) => updateHallazgo(selected.id, { location: event.target.value })} placeholder="Distrito o dirección" /></label>
         <p className="attribution">Dirección aproximada · Datos © OpenStreetMap contributors</p>
       </section>
-      <section className="message-card"><p className="eyebrow">VISTA PREVIA DE WHATSAPP</p><p>{messagePreview}</p><button className="whatsapp" onClick={openWhatsApp} type="button">Abrir WhatsApp</button></section>
+      <section className="message-card"><p className="eyebrow">VISTA PREVIA DE WHATSAPP</p><p>{messagePreview}</p><button className="whatsapp" onClick={openWhatsApp} type="button">Abrir WhatsApp</button>{selected.status !== "sent" && <button className="sent-button" onClick={markAsSent} type="button">Marcar como enviado</button>}</section>
     </main>;
   }
 
   return <main className="inbox-view">
     <button className="back" onClick={() => setView("capture")} type="button">← Seguir capturando</button>
     <header><p className="eyebrow">BANDEJA</p><h1>Tus Hallazgos</h1><p>La IA completa lo que puede. Tú confirmas antes de escribir.</p></header>
-    {hallazgos.length === 0 ? <section className="empty"><p>Aún no hay fotos.</p><button onClick={() => setView("capture")} type="button">Capturar letreros</button></section> : <section className="inbox-grid">{hallazgos.map((hallazgo) => <button className="hallazgo-card" key={hallazgo.id} onClick={() => openReview(hallazgo.id)} type="button"><img src={hallazgo.previewUrl} alt="Letrero guardado" /><span className={`status status-${hallazgo.status}`}>{statusText(hallazgo.status)}</span><strong>{hallazgo.operation || "Sin clasificar"}{hallazgo.propertyType ? ` · ${hallazgo.propertyType}` : ""}</strong><small>{hallazgo.phones[0] || "Completar datos"}</small></button>)}</section>}
+    {hallazgos.length === 0 ? <section className="empty"><p>Aún no hay fotos.</p><button onClick={() => setView("capture")} type="button">Capturar letreros</button></section> : <><div className="inbox-tabs" role="tablist" aria-label="Estado de Hallazgos"><button aria-selected={inboxTab === "new"} className={inboxTab === "new" ? "active" : ""} onClick={() => setInboxTab("new")} role="tab" type="button">Nuevos <b>{pendingCount}</b></button><button aria-selected={inboxTab === "sent"} className={inboxTab === "sent" ? "active" : ""} onClick={() => setInboxTab("sent")} role="tab" type="button">Enviados <b>{hallazgos.length - pendingCount}</b></button></div>{inboxHallazgos.length === 0 ? <p className="empty-tab">No hay Hallazgos en esta lista.</p> : <section className="inbox-grid">{inboxHallazgos.map((hallazgo) => <button className="hallazgo-card" key={hallazgo.id} onClick={() => openReview(hallazgo.id)} type="button"><img src={hallazgo.previewUrl} alt="Letrero guardado" /><span className={`status status-${hallazgo.status}`}>{statusText(hallazgo.status)}</span><strong>{hallazgo.operation || "Sin clasificar"}{hallazgo.propertyType ? ` · ${hallazgo.propertyType}` : ""}</strong><small>{hallazgo.phones[0] || "Completar datos"}</small></button>)}</section>}</>}
   </main>;
 }
