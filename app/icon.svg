@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="title">
+  <title>Contacto Letreros</title>
+  <rect width="192" height="192" rx="42" fill="#1d4935"/>
+  <path d="M48 53h96v60H48z" fill="#f4f1e9"/>
+  <path d="M65 73h62M65 92h44" stroke="#1d4935" stroke-linecap="round" stroke-width="11"/>
+  <path d="M79 113v29m34-29v29M63 142h66" fill="none" stroke="#de5a2c" stroke-linecap="round" stroke-width="10"/>
+</svg>
