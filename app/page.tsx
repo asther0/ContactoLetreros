@@ -3,35 +3,61 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type Operation = "alquiler" | "venta" | "";
+type Status = "captured" | "extracting" | "needs_review" | "ready_to_contact" | "contact_opened";
 
 type Hallazgo = {
   id: string;
   capturedAt: string;
-  photoDataUrl: string;
+  photo: File;
+  previewUrl: string;
+  status: Status;
   operation: Operation;
   propertyType: string;
   phones: string[];
+  selectedPhone: string;
   location: string;
   notes: string;
 };
 
-type Extraction = {
-  operation: Exclude<Operation, ""> | null;
-  phoneNumbers: string[];
-  propertyType: string | null;
-  confidence: "high" | "medium" | "low";
-  notes: string;
-};
+type StoredHallazgo = Omit<Hallazgo, "previewUrl">;
+type Extraction = { operation: Exclude<Operation, ""> | null; phoneNumbers: string[]; propertyType: string | null; confidence: "high" | "medium" | "low" };
 
-const storageKey = "contacto-letreros-hallazgos";
+const databaseName = "contacto-letreros";
+const storeName = "hallazgos";
 
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+function openDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(storeName, { keyPath: "id" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
+}
+
+async function saveHallazgo(hallazgo: Hallazgo) {
+  const database = await openDatabase();
+  const transaction = database.transaction(storeName, "readwrite");
+  const { previewUrl: _previewUrl, ...stored } = hallazgo;
+  transaction.objectStore(storeName).put(stored satisfies StoredHallazgo);
+  await new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function loadHallazgos() {
+  const database = await openDatabase();
+  const transaction = database.transaction(storeName, "readonly");
+  const request = transaction.objectStore(storeName).getAll();
+  const stored = await new Promise<StoredHallazgo[]>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result as StoredHallazgo[]);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return stored
+    .map((hallazgo) => ({ ...hallazgo, previewUrl: URL.createObjectURL(hallazgo.photo) }))
+    .sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
 }
 
 function buildMessage(operation: Operation, location: string, propertyType: string) {
@@ -41,191 +67,156 @@ function buildMessage(operation: Operation, location: string, propertyType: stri
   return `Hola, vi su letrero de ${action}${property}${place}. ¿Sigue disponible? Me interesa recibir más información.`;
 }
 
+function statusText(status: Status) {
+  return { captured: "Guardado", extracting: "Leyendo…", needs_review: "Revisar", ready_to_contact: "Listo", contact_opened: "WhatsApp abierto" }[status];
+}
+
+function getCurrentCoordinates() {
+  return new Promise<{ latitude: number; longitude: number } | null>((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  });
+}
+
 export default function Home() {
-  const [photo, setPhoto] = useState<File | null>(null);
-  const [photoDataUrl, setPhotoDataUrl] = useState("");
-  const [operation, setOperation] = useState<Operation>("");
-  const [propertyType, setPropertyType] = useState("");
-  const [phones, setPhones] = useState<string[]>([]);
-  const [location, setLocation] = useState("");
-  const [notes, setNotes] = useState("");
-  const [extracting, setExtracting] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [hallazgos, setHallazgos] = useState<Hallazgo[]>([]);
+  const [view, setView] = useState<"capture" | "inbox" | "review">("capture");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
-    if (saved) setHallazgos(JSON.parse(saved) as Hallazgo[]);
+    void loadHallazgos().then(setHallazgos).catch(() => setError("No pudimos abrir los Hallazgos guardados."));
   }, []);
 
-  const whatsappMessage = useMemo(
-    () => buildMessage(operation, location, propertyType),
-    [location, operation, propertyType],
+  const selected = hallazgos.find((hallazgo) => hallazgo.id === selectedId) ?? null;
+  const pendingCount = hallazgos.filter((hallazgo) => hallazgo.status !== "contact_opened").length;
+  const messagePreview = useMemo(
+    () => selected ? buildMessage(selected.operation, selected.location, selected.propertyType) : "",
+    [selected],
   );
 
-  function persistHallazgos(next: Hallazgo[]) {
-    setHallazgos(next);
-    window.localStorage.setItem(storageKey, JSON.stringify(next));
+  function updateHallazgo(id: string, changes: Partial<Hallazgo>) {
+    setHallazgos((current) => current.map((hallazgo) => {
+      if (hallazgo.id !== id) return hallazgo;
+      const updated = { ...hallazgo, ...changes };
+      void saveHallazgo(updated);
+      return updated;
+    }));
   }
 
-  async function getLocation() {
-    if (!navigator.geolocation) {
-      setError("Este navegador no permite usar el GPS.");
-      return;
+  async function enrichLocation(ids: string[]) {
+    const coordinates = await getCurrentCoordinates();
+    if (!coordinates) return;
+
+    try {
+      const response = await fetch(`/api/location/reverse?lat=${coordinates.latitude}&lon=${coordinates.longitude}`);
+      const data = (await response.json()) as { location?: { label?: string | null }; error?: string };
+      if (!response.ok || !data.location?.label) return;
+      ids.forEach((id) => updateHallazgo(id, { location: data.location?.label ?? "" }));
+    } catch {
+      // La ubicación no bloquea la Captura rápida.
     }
-
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => setLocation(`${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`),
-      () => setError("No pudimos obtener tu ubicación. Puedes escribirla después."),
-      { enableHighAccuracy: true, timeout: 10000 },
-    );
   }
 
-  async function handlePhoto(event: ChangeEvent<HTMLInputElement>) {
-    const selected = event.target.files?.[0];
-    if (!selected) return;
-
-    setError("");
-    setMessage("");
-    setPhoto(selected);
-    setPhotoDataUrl(await readFileAsDataUrl(selected));
-    void getLocation();
-  }
-
-  async function extract() {
-    if (!photo) return;
-    setExtracting(true);
-    setError("");
-    setMessage("");
-
+  async function extractHallazgo(id: string, photo: File) {
     try {
       const body = new FormData();
       body.set("photo", photo);
       const response = await fetch("/api/extract", { method: "POST", body });
       const data = (await response.json()) as Extraction & { error?: string };
       if (!response.ok) throw new Error(data.error);
-
-      setOperation(data.operation ?? "");
-      setPropertyType(data.propertyType ?? "");
-      setPhones(data.phoneNumbers);
-      setNotes(data.notes);
-      setMessage(`Lectura lista (${data.confidence === "high" ? "alta" : data.confidence === "medium" ? "media" : "baja"} confianza). Confirma los datos antes de contactar.`);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "No pudimos leer la foto.");
-    } finally {
-      setExtracting(false);
+      const phones = data.phoneNumbers;
+      updateHallazgo(id, {
+        operation: data.operation ?? "",
+        propertyType: data.propertyType ?? "",
+        phones,
+        selectedPhone: phones[0] ?? "",
+        status: phones.length > 0 ? "ready_to_contact" : "needs_review",
+      });
+    } catch {
+      updateHallazgo(id, { status: "needs_review", notes: "No se pudo leer automáticamente. Completa los datos cuando puedas." });
     }
   }
 
-  function saveHallazgo() {
-    if (!photoDataUrl) {
-      setError("Toma o sube una foto antes de guardar.");
-      return;
-    }
+  async function handleCapture(event: ChangeEvent<HTMLInputElement>) {
+    const photos = Array.from(event.target.files ?? []);
+    if (!photos.length) return;
+    setError("");
+    setNotice(`${photos.length} ${photos.length === 1 ? "foto guardada" : "fotos guardadas"}. Las leeremos en segundo plano.`);
+    event.target.value = "";
 
-    const hallazgo: Hallazgo = {
+    const captured = photos.map((photo): Hallazgo => ({
       id: crypto.randomUUID(),
       capturedAt: new Date().toISOString(),
-      photoDataUrl,
-      operation,
-      propertyType,
-      phones,
-      location,
-      notes,
-    };
-    persistHallazgos([hallazgo, ...hallazgos]);
-    setMessage("Hallazgo guardado en este dispositivo.");
+      photo,
+      previewUrl: URL.createObjectURL(photo),
+      status: "extracting",
+      operation: "",
+      propertyType: "",
+      phones: [],
+      selectedPhone: "",
+      location: "",
+      notes: "",
+    }));
+
+    setHallazgos((current) => [...captured, ...current]);
+    captured.forEach((hallazgo) => void saveHallazgo(hallazgo));
+    void enrichLocation(captured.map((hallazgo) => hallazgo.id));
+    void (async () => {
+      for (const hallazgo of captured) await extractHallazgo(hallazgo.id, hallazgo.photo);
+    })();
   }
 
-  function openWhatsApp(phone: string) {
-    const normalizedPhone = phone.replace(/\D/g, "");
-    if (!normalizedPhone) {
-      setError("Escribe o confirma un teléfono antes de abrir WhatsApp.");
+  function openReview(id: string) {
+    setSelectedId(id);
+    setView("review");
+  }
+
+  function openWhatsApp() {
+    if (!selected?.selectedPhone) {
+      setError("Elige o escribe un teléfono antes de abrir WhatsApp.");
       return;
     }
-    window.open(`https://wa.me/${normalizedPhone}?text=${encodeURIComponent(whatsappMessage)}`, "_blank", "noopener,noreferrer");
+    const phone = selected.selectedPhone.replace(/\D/g, "");
+    updateHallazgo(selected.id, { status: "contact_opened" });
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(messagePreview)}`, "_blank", "noopener,noreferrer");
   }
 
-  return (
-    <main>
-      <section className="hero">
-        <p className="eyebrow">CAPTURA RÁPIDA</p>
-        <h1>Contacto<br />Letreros</h1>
-        <p>Foto, contexto y WhatsApp. Sin perder la oportunidad mientras caminas.</p>
+  if (view === "capture") {
+    return <main className="capture-view">
+      <header><p className="eyebrow">CONTACTO LETREROS</p><h1>Ve. Foto.<br />Sigue.</h1><p>Guarda todos los letreros ahora. Revisa los detalles después.</p></header>
+      <label className="capture-button"><input accept="image/*" capture="environment" multiple onChange={handleCapture} type="file" /><span>＋</span> Tomar o subir fotos</label>
+      {notice && <p className="notice success">{notice}</p>}
+      {error && <p className="notice error">{error}</p>}
+      <button className="inbox-link" onClick={() => setView("inbox")} type="button">Revisar bandeja <b>{pendingCount}</b></button>
+    </main>;
+  }
+
+  if (view === "review" && selected) {
+    return <main className="review-view">
+      <button className="back" onClick={() => setView("inbox")} type="button">← Bandeja</button>
+      <img className="detail-photo" src={selected.previewUrl} alt="Letrero capturado" />
+      <p className="status">{statusText(selected.status)}</p>
+      <section className="detail-card"><h2>Completa solo lo necesario</h2>
+        <div className="choice-row"><button aria-pressed={selected.operation === "alquiler"} className={selected.operation === "alquiler" ? "chosen" : ""} onClick={() => updateHallazgo(selected.id, { operation: "alquiler" })} type="button">Alquiler</button><button aria-pressed={selected.operation === "venta"} className={selected.operation === "venta" ? "chosen" : ""} onClick={() => updateHallazgo(selected.id, { operation: "venta" })} type="button">Venta</button></div>
+        <label>Qué se anuncia<input value={selected.propertyType} onChange={(event) => updateHallazgo(selected.id, { propertyType: event.target.value })} placeholder="Departamento, cuarto…" /></label>
+        <label>Teléfonos<input value={selected.phones.join(", ")} onChange={(event) => { const phones = event.target.value.split(",").map((phone) => phone.trim()).filter(Boolean); updateHallazgo(selected.id, { phones, selectedPhone: selected.selectedPhone || phones[0] || "" }); }} inputMode="tel" placeholder="999 999 999" /></label>
+        {selected.phones.length > 1 && <div className="phone-choice">{selected.phones.map((phone) => <button aria-pressed={selected.selectedPhone === phone} className={selected.selectedPhone === phone ? "chosen" : ""} key={phone} onClick={() => updateHallazgo(selected.id, { selectedPhone: phone })} type="button">{phone}</button>)}</div>}
+        <label>Zona aproximada<input value={selected.location} onChange={(event) => updateHallazgo(selected.id, { location: event.target.value })} placeholder="Distrito o dirección" /></label>
+        <p className="attribution">Dirección aproximada · Datos © OpenStreetMap contributors</p>
       </section>
+      <section className="message-card"><p className="eyebrow">VISTA PREVIA DE WHATSAPP</p><p>{messagePreview}</p><button className="whatsapp" onClick={openWhatsApp} type="button">Abrir WhatsApp</button></section>
+    </main>;
+  }
 
-      <section className="card capture-card">
-        <label className="photo-picker">
-          <input accept="image/*" capture="environment" onChange={handlePhoto} type="file" />
-          {photoDataUrl ? <img alt="Letrero capturado" src={photoDataUrl} /> : <span><b>＋</b> Tomar foto o subir letrero</span>}
-        </label>
-
-        {photo && (
-          <div className="actions">
-            <button className="primary" disabled={extracting} onClick={extract} type="button">
-              {extracting ? "Leyendo letrero…" : "Leer con IA"}
-            </button>
-            <button className="secondary" onClick={getLocation} type="button">Actualizar GPS</button>
-          </div>
-        )}
-
-        {message && <p className="notice success">{message}</p>}
-        {error && <p className="notice error">{error}</p>}
-      </section>
-
-      {photo && (
-        <section className="card review-card">
-          <div className="section-heading"><span>02</span><h2>Confirma el Hallazgo</h2></div>
-          <div className="field-row">
-            <label>Operación
-              <select value={operation} onChange={(event) => setOperation(event.target.value as Operation)}>
-                <option value="">Sin definir</option>
-                <option value="alquiler">Alquiler</option>
-                <option value="venta">Venta</option>
-              </select>
-            </label>
-            <label>Tipo anunciado
-              <input value={propertyType} onChange={(event) => setPropertyType(event.target.value)} placeholder="Departamento, cuarto…" />
-            </label>
-          </div>
-          <label>Teléfonos
-            <input value={phones.join(", ")} onChange={(event) => setPhones(event.target.value.split(",").map((phone) => phone.trim()).filter(Boolean))} placeholder="999 999 999, 988 888 888" inputMode="tel" />
-          </label>
-          <label>Ubicación capturada
-            <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Obteniendo GPS…" />
-          </label>
-          <label>Notas de lectura
-            <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
-          </label>
-          <button className="save" onClick={saveHallazgo} type="button">Guardar Hallazgo</button>
-        </section>
-      )}
-
-      {phones.length > 0 && (
-        <section className="card contact-card">
-          <div className="section-heading"><span>03</span><h2>Contactar</h2></div>
-          <p className="message-preview">{whatsappMessage}</p>
-          <div className="phone-actions">
-            {phones.map((phone) => <button key={phone} onClick={() => openWhatsApp(phone)} type="button">WhatsApp · {phone}</button>)}
-          </div>
-        </section>
-      )}
-
-      <section className="saved">
-        <div className="section-heading"><span>{String(hallazgos.length).padStart(2, "0")}</span><h2>Hallazgos guardados</h2></div>
-        {hallazgos.length === 0 ? <p>Aún no guardaste Hallazgos en este dispositivo.</p> : (
-          <div className="saved-grid">
-            {hallazgos.map((hallazgo) => (
-              <article key={hallazgo.id}>
-                <img alt="Letrero guardado" src={hallazgo.photoDataUrl} />
-                <p>{hallazgo.operation || "Sin operación"} · {hallazgo.propertyType || "Sin tipo"}</p>
-                <small>{hallazgo.phones.join(" · ") || "Sin teléfono"}</small>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-    </main>
-  );
+  return <main className="inbox-view">
+    <button className="back" onClick={() => setView("capture")} type="button">← Seguir capturando</button>
+    <header><p className="eyebrow">BANDEJA</p><h1>Tus Hallazgos</h1><p>La IA completa lo que puede. Tú confirmas antes de escribir.</p></header>
+    {hallazgos.length === 0 ? <section className="empty"><p>Aún no hay fotos.</p><button onClick={() => setView("capture")} type="button">Capturar letreros</button></section> : <section className="inbox-grid">{hallazgos.map((hallazgo) => <button className="hallazgo-card" key={hallazgo.id} onClick={() => openReview(hallazgo.id)} type="button"><img src={hallazgo.previewUrl} alt="Letrero guardado" /><span className={`status status-${hallazgo.status}`}>{statusText(hallazgo.status)}</span><strong>{hallazgo.operation || "Sin clasificar"}{hallazgo.propertyType ? ` · ${hallazgo.propertyType}` : ""}</strong><small>{hallazgo.phones[0] || "Completar datos"}</small></button>)}</section>}
+  </main>;
 }

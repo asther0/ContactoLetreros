@@ -7,10 +7,14 @@ type Extraction = {
   phoneNumbers: string[];
   propertyType: string | null;
   confidence: "high" | "medium" | "low";
-  notes: string;
 };
 
-const extractionPrompt = `Examina este letrero inmobiliario. Devuelve solo JSON válido con exactamente estas claves: operation ("alquiler" | "venta" | null), phone_numbers (array de strings, solo dígitos que puedas leer con confianza), advertised_property (string | null), confidence ("high" | "medium" | "low"), notes (string). No inventes dígitos. Si un número es ambiguo, omítelo y explícalo en notes.`;
+const extractionPrompt = `Examina este letrero inmobiliario. Devuelve solo JSON válido con exactamente estas claves: operation ("alquiler" | "venta" | null), phone_numbers (array de strings, solo dígitos que puedas leer con confianza), advertised_property (string | null), visible_text (string con todo el texto legible), confidence ("high" | "medium" | "low"). No inventes dígitos. Si un número es ambiguo, omítelo.`;
+
+function phoneNumbersFromText(text: string) {
+  const matches = text.match(/(?:\+?51[\s.-]?)?9\d{2}[\s.-]?\d{3}[\s.-]?\d{3}/g) ?? [];
+  return matches.map((phone) => phone.replace(/\D/g, "").replace(/^51(?=9\d{8}$)/, ""));
+}
 
 function parseExtraction(text: string): Extraction {
   const cleaned = text.replace(/^```json\s*|\s*```$/g, "").trim();
@@ -18,23 +22,24 @@ function parseExtraction(text: string): Extraction {
     operation?: Extraction["operation"];
     phone_numbers?: unknown;
     advertised_property?: unknown;
+    visible_text?: unknown;
     confidence?: Extraction["confidence"];
-    notes?: unknown;
   };
 
-  const phoneNumbers = Array.isArray(parsed.phone_numbers)
+  const modelPhones = Array.isArray(parsed.phone_numbers)
     ? parsed.phone_numbers
         .filter((phone): phone is string => typeof phone === "string")
         .map((phone) => phone.replace(/\D/g, ""))
         .filter((phone) => phone.length >= 7 && phone.length <= 15)
     : [];
+  const visibleText = typeof parsed.visible_text === "string" ? parsed.visible_text : "";
+  const phoneNumbers = [...new Set([...modelPhones, ...phoneNumbersFromText(visibleText)])];
 
   return {
     operation: parsed.operation === "alquiler" || parsed.operation === "venta" ? parsed.operation : null,
     phoneNumbers,
     propertyType: typeof parsed.advertised_property === "string" ? parsed.advertised_property : null,
     confidence: parsed.confidence === "high" || parsed.confidence === "medium" ? parsed.confidence : "low",
-    notes: typeof parsed.notes === "string" ? parsed.notes : "No se recibieron observaciones.",
   };
 }
 
