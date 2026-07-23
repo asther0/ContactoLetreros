@@ -21,6 +21,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          local_source_id: string | null;
           name: string;
           criteria: SearchCriteria;
           created_at: string;
@@ -29,6 +30,7 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
+          local_source_id?: string | null;
           name: string;
           criteria?: SearchCriteria;
           created_at?: string;
@@ -37,6 +39,7 @@ export interface Database {
         Update: {
           name?: string;
           criteria?: SearchCriteria;
+          local_source_id?: string | null;
           updated_at?: string;
         };
         Relationships: [];
@@ -45,6 +48,7 @@ export interface Database {
         Row: {
           id: string;
           user_id: string;
+          local_source_id: string | null;
           search_id: string;
           origin: OpportunityOrigin;
           status: OpportunityStatus;
@@ -70,6 +74,7 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
+          local_source_id?: string | null;
           search_id: string;
           origin: OpportunityOrigin;
           status?: OpportunityStatus;
@@ -92,13 +97,14 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
         };
-        Update: Omit<Partial<Database["public"]["Tables"]["opportunities"]["Insert"]>, "id" | "user_id" | "search_id" | "origin">;
+        Update: Omit<Partial<Database["public"]["Tables"]["opportunities"]["Insert"]>, "id" | "user_id" | "local_source_id" | "search_id" | "origin">;
         Relationships: [];
       };
       opportunity_photos: {
         Row: {
           id: string;
           user_id: string;
+          local_source_id: string | null;
           opportunity_id: string;
           storage_path: string;
           mime_type: string | null;
@@ -110,6 +116,7 @@ export interface Database {
         Insert: {
           id?: string;
           user_id: string;
+          local_source_id?: string | null;
           opportunity_id: string;
           storage_path: string;
           mime_type?: string | null;
