@@ -4,6 +4,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase/browser";
+import { createSupabaseOpportunitySyncGateway, syncLocalOpportunities } from "../lib/sync/local-opportunity-sync";
 
 const OpportunityMap = dynamic(() => import("../components/opportunity-map"), { ssr: false });
 
@@ -91,11 +92,17 @@ export default function Home() {
   const [mobileView, setMobileView] = useState<"list" | "map">("list");
   const [filter, setFilter] = useState<"all" | OpportunityStatus | "favorites">("all");
   const [notice, setNotice] = useState(""); const [error, setError] = useState(""); const [user, setUser] = useState<User | null>(null);
+  const [localReady, setLocalReady] = useState(false);
   const [newSearchName, setNewSearchName] = useState(""); const [renaming, setRenaming] = useState(false);
   const [importData, setImportData] = useState({ origin: "Airbnb" as Origin, url: "", notes: "", photo: null as File | null });
 
-  useEffect(() => { setSearches(loadSearches()); void loadHallazgos().then((items) => { setHallazgos(items); items.forEach((item) => void saveHallazgo(item)); }).catch(() => setError("No pudimos abrir las oportunidades guardadas.")); }, []);
+  useEffect(() => { setSearches(loadSearches()); void loadHallazgos().then((items) => { setHallazgos(items); items.forEach((item) => void saveHallazgo(item)); }).catch(() => setError("No pudimos abrir las oportunidades guardadas.")).finally(() => setLocalReady(true)); }, []);
   useEffect(() => { if (!supabase) return; void supabase.auth.getUser().then(({ data }) => setUser(data.user)); const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null)); return () => subscription.subscription.unsubscribe(); }, []);
+  useEffect(() => {
+    if (!user || !supabase || !localReady) return;
+    const timeout = window.setTimeout(() => void syncToCloud(), 900);
+    return () => window.clearTimeout(timeout);
+  }, [user, localReady, hallazgos, searches]);
 
   const selected = hallazgos.find((item) => item.id === selectedId) ?? null;
   const activeSearch = searches.find((search) => search.id === activeSearchId) ?? unclassifiedSearch;
@@ -119,6 +126,32 @@ export default function Home() {
   }
   function createImport(event: FormEvent) { event.preventDefault(); const url = importData.url.trim(); const requiresUrl = ["Airbnb", "Facebook", "Adondevivir"].includes(importData.origin); if (requiresUrl && !url) { setError(`El link original es obligatorio para ${importData.origin}.`); return; } if (!url && !importData.notes.trim() && !importData.photo) { setError("Agrega al menos un enlace, nota o captura."); return; } const photo = importData.photo; const item: Hallazgo = { id: crypto.randomUUID(), capturedAt: new Date().toISOString(), photo, previewUrl: photo ? URL.createObjectURL(photo) : "", status: "needs_review", operation: "", propertyType: "", phones: [], selectedPhone: "", location: "", notes: importData.notes.trim(), ocrText: "", searchId: activeSearchId, origin: importData.origin, opportunityStatus: "new", favorite: false, url, locationKind: "approximate" }; setHallazgos((items) => [item, ...items]); void saveHallazgo(item); setImportData({ origin: "Airbnb", url: "", notes: "", photo: null }); setError(""); setView("search"); setNotice("Oportunidad importada a esta búsqueda."); }
   async function signIn() { if (!supabase) { setError("Falta configurar Supabase para iniciar sesión."); return; } const { error: signInError } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } }); if (signInError) setError("No pudimos abrir el inicio de sesión con Google."); }
+  async function syncToCloud() {
+    if (!supabase || !user) return;
+    const report = await syncLocalOpportunities(user.id, {
+      listSearches: async () => searches.map((search) => ({ id: search.id, name: search.name })),
+      listOpportunities: async () => hallazgos.map((item) => ({
+        id: item.id,
+        searchId: item.searchId,
+        origin: item.origin,
+        status: item.opportunityStatus,
+        operation: item.operation,
+        propertyType: item.propertyType,
+        phoneNumbers: item.phones,
+        selectedPhone: item.selectedPhone,
+        sourceUrl: item.url,
+        note: item.notes,
+        favorite: item.favorite,
+        location: item.location,
+        locationKind: item.locationKind,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        photo: item.photo ? { id: item.id, blob: item.photo, fileName: item.photo.name, contentType: item.photo.type, extractedText: item.ocrText } : null,
+      })),
+    }, createSupabaseOpportunitySyncGateway(supabase));
+    if (report.failures.length) setError("Algunas oportunidades siguen solo en este teléfono. Reintentaremos al próximo cambio.");
+    else setNotice("Guardado en tu cuenta.");
+  }
   function openWhatsApp() { if (!selected?.selectedPhone) { setError("Elige o escribe un teléfono antes de abrir WhatsApp."); return; } updateHallazgo(selected.id, { status: "contact_opened", opportunityStatus: "contacted" }); window.open(`https://wa.me/${selected.selectedPhone.replace(/\D/g, "")}?text=${encodeURIComponent(messagePreview)}`, "_blank", "noopener,noreferrer"); }
 
   if (view === "capture") return <main className="capture-view"><header><p className="eyebrow">CONTACTO LETREROS</p><h1>Ve. Foto.<br />Guarda.</h1><p>Captura varios letreros. Los detalles no te detienen en la calle.</p></header><label className="capture-button"><input accept="image/*" capture="environment" multiple onChange={handleCapture} type="file" /><span>＋</span> Tomar o subir fotos<br /><small>Se guardan en {activeSearch.name}</small></label><button className="inbox-link" onClick={() => setView("search")} type="button">← Volver a {activeSearch.name}</button></main>;
