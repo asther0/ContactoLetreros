@@ -12,6 +12,7 @@ node_modules/
 .next/
 *.tsbuildinfo
 .DS_Store
+supabase/.temp/
 
 # Fotos de prueba y teléfonos de terceros
 img/
