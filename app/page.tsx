@@ -17,10 +17,10 @@ type Hallazgo = {
   selectedPhone: string;
   location: string;
   notes: string;
+  ocrText: string;
 };
 
 type StoredHallazgo = Omit<Hallazgo, "previewUrl">;
-type Extraction = { operation: Exclude<Operation, ""> | null; phoneNumbers: string[]; propertyType: string | null; confidence: "high" | "medium" | "low" };
 
 const databaseName = "contacto-letreros";
 const storeName = "hallazgos";
@@ -68,7 +68,28 @@ function buildMessage(operation: Operation, location: string, propertyType: stri
 }
 
 function statusText(status: Status) {
-  return { captured: "Guardado", extracting: "Leyendo…", needs_review: "Revisar", ready_to_contact: "Listo", contact_opened: "WhatsApp abierto", sent: "Enviado" }[status];
+  return { captured: "Guardado", extracting: "Leyendo en tu teléfono…", needs_review: "Revisar", ready_to_contact: "Listo", contact_opened: "WhatsApp abierto", sent: "Enviado" }[status];
+}
+
+function phoneNumbersFromText(text: string) {
+  const matches = text.match(/(?:\+?51[\s.-]?)?9\d{2}[\s.-]?\d{3}[\s.-]?\d{3}/g) ?? [];
+  return [...new Set(matches.map((phone) => phone.replace(/\D/g, "").replace(/^51(?=9\d{8}$)/, "")))];
+}
+
+function inferOperation(text: string): Operation {
+  const normalized = text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  if (/\b(se\s+)?alquila(?:n|mos)?\b|\balquiler\b/.test(normalized)) return "alquiler";
+  if (/\b(se\s+)?vende(?:n|mos)?\b|\bventa\b/.test(normalized)) return "venta";
+  return "";
+}
+
+function inferPropertyType(text: string) {
+  const normalized = text.toLowerCase();
+  const candidate = ["departamento", "dpto", "casa", "cuarto", "habitación", "habitacion", "oficina", "local", "terreno"]
+    .find((property) => normalized.includes(property));
+  if (candidate === "dpto") return "Departamento";
+  if (candidate === "habitacion") return "Habitación";
+  return candidate ? `${candidate.slice(0, 1).toUpperCase()}${candidate.slice(1)}` : "";
 }
 
 function getCurrentCoordinates() {
@@ -125,23 +146,26 @@ export default function Home() {
     }
   }
 
-  async function extractHallazgo(id: string, photo: File) {
+  async function extractHallazgoLocally(id: string, photo: File) {
+    let worker: Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>> | null = null;
     try {
-      const body = new FormData();
-      body.set("photo", photo);
-      const response = await fetch("/api/extract", { method: "POST", body });
-      const data = (await response.json()) as Extraction & { error?: string };
-      if (!response.ok) throw new Error(data.error);
-      const phones = data.phoneNumbers;
+      const { createWorker } = await import("tesseract.js");
+      worker = await createWorker("spa");
+      const { data } = await worker.recognize(photo);
+      const text = data.text.trim();
+      const phones = phoneNumbersFromText(text);
       updateHallazgo(id, {
-        operation: data.operation ?? "",
-        propertyType: data.propertyType ?? "",
+        operation: inferOperation(text),
+        propertyType: inferPropertyType(text),
         phones,
         selectedPhone: phones[0] ?? "",
+        ocrText: text,
         status: phones.length > 0 ? "ready_to_contact" : "needs_review",
       });
     } catch {
-      updateHallazgo(id, { status: "needs_review", notes: "No se pudo leer automáticamente. Completa los datos cuando puedas." });
+      updateHallazgo(id, { status: "needs_review", notes: "No se pudo leer localmente. Completa los datos cuando puedas." });
+    } finally {
+      await worker?.terminate();
     }
   }
 
@@ -164,13 +188,14 @@ export default function Home() {
       selectedPhone: "",
       location: "",
       notes: "",
+      ocrText: "",
     }));
 
     setHallazgos((current) => [...captured, ...current]);
     captured.forEach((hallazgo) => void saveHallazgo(hallazgo));
     void enrichLocation(captured.map((hallazgo) => hallazgo.id));
     void (async () => {
-      for (const hallazgo of captured) await extractHallazgo(hallazgo.id, hallazgo.photo);
+      for (const hallazgo of captured) await extractHallazgoLocally(hallazgo.id, hallazgo.photo);
     })();
   }
 
@@ -218,6 +243,7 @@ export default function Home() {
         <label>Zona aproximada<input value={selected.location} onChange={(event) => updateHallazgo(selected.id, { location: event.target.value })} placeholder="Distrito o dirección" /></label>
         <p className="attribution">Dirección aproximada · Datos © OpenStreetMap contributors</p>
       </section>
+      {selected.ocrText && <details className="ocr-text"><summary>Texto leído en tu teléfono</summary><p>{selected.ocrText}</p></details>}
       <section className="message-card"><p className="eyebrow">VISTA PREVIA DE WHATSAPP</p><p>{messagePreview}</p><button className="whatsapp" onClick={openWhatsApp} type="button">Abrir WhatsApp</button>{selected.status !== "sent" && <button className="sent-button" onClick={markAsSent} type="button">Marcar como enviado</button>}</section>
     </main>;
   }

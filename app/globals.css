@@ -48,6 +48,9 @@ input { background: #faf9f5; border: 1px solid #d5d9ce; border-radius: 9px; colo
 .choice-row .chosen, .phone-choice .chosen { background: #dfeedd; border-color: #689164; color: #245434; }
 .phone-choice { margin-top: 10px; }
 .attribution { color: #718077; font-size: .7rem; margin: 11px 0 0; }
+.ocr-text { background: #fffdf8; border: 1px solid #dfd9ce; border-radius: 14px; color: #526058; font-size: .82rem; line-height: 1.45; margin-top: 14px; padding: 14px 16px; }
+.ocr-text summary { color: #315941; cursor: pointer; font-weight: 700; }
+.ocr-text p { margin: 12px 0 0; white-space: pre-wrap; }
 .message-card { background: #e8f0e3; }
 .message-card > p:last-of-type { color: #3f5045; line-height: 1.5; margin: 10px 0 17px; }
 .whatsapp { background: #1d4935; border: 0; border-radius: 10px; color: #fff; font-weight: 700; min-height: 48px; width: 100%; }
