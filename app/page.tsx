@@ -1,6 +1,8 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase/browser";
 
 type Operation = "alquiler" | "venta" | "";
 type Status = "captured" | "extracting" | "needs_review" | "ready_to_contact" | "contact_opened" | "sent";
@@ -110,9 +112,17 @@ export default function Home() {
   const [inboxTab, setInboxTab] = useState<"new" | "sent">("new");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     void loadHallazgos().then(setHallazgos).catch(() => setError("No pudimos abrir los Hallazgos guardados."));
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    return () => subscription.subscription.unsubscribe();
   }, []);
 
   const selected = hallazgos.find((hallazgo) => hallazgo.id === selectedId) ?? null;
@@ -204,6 +214,24 @@ export default function Home() {
     setView("review");
   }
 
+  async function signIn() {
+    if (!supabase) {
+      setError("Falta configurar Supabase para iniciar sesión.");
+      return;
+    }
+    const { error: signInError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (signInError) setError("No pudimos abrir el inicio de sesión con Google.");
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setNotice("Sesión cerrada.");
+  }
+
   function openWhatsApp() {
     if (!selected?.selectedPhone) {
       setError("Elige o escribe un teléfono antes de abrir WhatsApp.");
@@ -222,7 +250,7 @@ export default function Home() {
 
   if (view === "capture") {
     return <main className="capture-view">
-      <header><p className="eyebrow">CONTACTO LETREROS</p><h1>Ve. Foto.<br />Sigue.</h1><p>Guarda todos los letreros ahora. Revisa los detalles después.</p></header>
+      <header><p className="eyebrow">CONTACTO LETREROS</p><h1>Ve. Foto.<br />Sigue.</h1><p>Guarda todos los letreros ahora. Revisa los detalles después.</p>{user ? <button className="account-action" onClick={signOut} type="button">{user.email} · Salir</button> : <button className="account-action" onClick={signIn} type="button">Iniciar sesión con Google</button>}</header>
       <label className="capture-button"><input accept="image/*" capture="environment" multiple onChange={handleCapture} type="file" /><span>＋</span> Tomar o subir fotos</label>
       {notice && <p className="notice success">{notice}</p>}
       {error && <p className="notice error">{error}</p>}
